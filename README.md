@@ -1,8 +1,8 @@
 # agentmesh
 
-**Lightweight multi-agent orchestration for LLMs.**
+**The simplest way to build multi-agent LLM pipelines.**
 
-Build pipelines where a router directs user messages to the right specialist agent — with tool use, session memory, priority short-circuits, and zero boilerplate.
+Works with **OpenAI** and **Anthropic**. One pattern — Pipeline → Router → Agent — with smart routing, tool use, session memory, and priority short-circuits built in.
 
 ```bash
 npm install agentmesh
@@ -10,97 +10,101 @@ npm install agentmesh
 
 ---
 
-## Why agentmesh
+## The problem with other frameworks
 
-Most agent frameworks make you choose between raw API calls (too much code) and heavyweight abstractions (too much magic). agentmesh gives you one pattern — **Pipeline → Router → Agent** — and gets out of the way.
+LangChain has 500+ classes. CrewAI forces you into "role play" metaphors. OpenAI's Agents SDK only works with OpenAI.
 
-- One call to route, one to respond
-- Priority short-circuit: bypass LLM routing for time-sensitive signals
-- Keyword triggers for fast routing without an extra LLM call
-- Session memory included, no setup required
-- Full TypeScript, minimal dependencies
-- Works with any compatible LLM API
+agentmesh gives you one thing: a pipeline that routes messages to the right agent, runs tool loops until done, and remembers the conversation. Nothing else.
 
 ---
 
-## Quickstart
+## Quickstart — OpenAI
 
 ```ts
-import { Pipeline, Agent } from 'agentmesh';
+import { Pipeline, Agent, OpenAIProvider } from 'agentmesh';
 
 const pipeline = new Pipeline({
-  apiKey: process.env.LLM_API_KEY!,
-  model: 'your-model-id',
+  provider: new OpenAIProvider(process.env.OPENAI_API_KEY!),
+  model: 'gpt-4o-mini',
 });
 
 pipeline
   .addAgent(new Agent({
-    name: 'researcher',
-    description: 'Answers research questions and explains complex topics',
-    systemPrompt: 'You are a thorough research assistant. Explain clearly and cite reasoning.',
-  }))
-  .addAgent(new Agent({
     name: 'coder',
     description: 'Writes and debugs code in any language',
-    systemPrompt: 'You are an expert software engineer. Write clean, working code with explanations.',
+    systemPrompt: 'You are an expert software engineer. Write clean, working code.',
   }))
   .addAgent(new Agent({
-    name: 'support',
-    description: 'Handles customer questions and troubleshooting',
-    systemPrompt: 'You are a friendly support agent. Be concise, helpful, and empathetic.',
+    name: 'researcher',
+    description: 'Answers research and factual questions',
+    systemPrompt: 'You are a thorough research assistant. Be clear and cite your reasoning.',
   }));
 
-const result = await pipeline.run('How do I reverse a linked list in Python?');
-console.log(result.output);
-// → routed to "coder", returned a clean Python solution
+const result = await pipeline.run('How do I debounce a function in JavaScript?');
+console.log(result.output);     // clean JS answer
+console.log(result.agentUsed);  // "coder"
+```
+
+## Quickstart — Anthropic
+
+```ts
+import { Pipeline, Agent, AnthropicProvider } from 'agentmesh';
+
+const pipeline = new Pipeline({
+  provider: new AnthropicProvider(process.env.ANTHROPIC_API_KEY!),
+  model: 'claude-haiku-4-5-20251001',
+});
+
+// same Agent/addAgent API — provider is the only difference
 ```
 
 ---
 
 ## Core concepts
 
-### Pipeline
+### Providers
 
-The entry point. Holds your agents, routes messages, and manages session memory.
+Swap the provider to switch models. Both implement the same interface so your agent code never changes.
 
 ```ts
-const pipeline = new Pipeline({
-  apiKey: 'your-api-key',
-  model: 'your-model-id',
-  sessionTtlMs: 30 * 60 * 1000,  // session expiry (default: 30 min)
-  debug: true,                     // log routing decisions
-});
+import { AnthropicProvider, OpenAIProvider } from 'agentmesh';
+
+new AnthropicProvider(process.env.ANTHROPIC_API_KEY!)
+new OpenAIProvider(process.env.OPENAI_API_KEY!)
 ```
 
-### Agent
+You can also bring your own by implementing the `LLMProvider` interface — works with any API that supports chat + tool use.
 
-A specialist with a name, description, system prompt, and optional tools.
+### Agents
+
+Each agent has a name, a description (used for routing), and a system prompt.
 
 ```ts
 new Agent({
-  name: 'analyst',
-  description: 'Analyzes data and generates reports',
-  systemPrompt: 'You are a data analyst. Be precise and structured.',
-  model: 'your-model-id',   // override per-agent if needed
-  maxIterations: 8,          // max tool-use loops (default: 5)
-  tools: [myTool],
+  name: 'support',
+  description: 'Handles billing, account, and subscription questions',
+  systemPrompt: 'You are a friendly support agent. Be concise and helpful.',
+  model: 'gpt-4o',           // override per-agent
+  maxIterations: 8,           // max tool-use loops (default: 5)
+  tools: [lookupUser],
+  triggerKeywords: ['billing', 'invoice', 'charge', 'subscription'],
 })
 ```
 
 ### Tools
 
-Any function the agent can call. Define the schema and the execute function:
+Define a schema and an execute function. The agent calls your tool automatically when needed.
 
 ```ts
 import type { AgentTool } from 'agentmesh';
 
-const weatherTool: AgentTool = {
+const getWeather: AgentTool = {
   name: 'get_weather',
   description: 'Get current weather for a city',
   input_schema: {
     type: 'object',
     properties: {
-      city: { type: 'string', description: 'City name' },
+      city: { type: 'string', description: 'City name, e.g. Chicago' },
     },
     required: ['city'],
   },
@@ -111,90 +115,135 @@ const weatherTool: AgentTool = {
 };
 ```
 
+### Routing
+
+agentmesh picks the right agent in this order — fastest first:
+
+| Step | Method | LLM call? |
+|------|--------|-----------|
+| 1 | Priority keyword match | No |
+| 2 | Standard keyword match | No |
+| 3 | Single agent registered | No |
+| 4 | LLM-based routing decision | Yes (1 fast call) |
+
+Most real apps route via keywords and never pay for a routing call.
+
 ### Priority short-circuit
 
-Some messages should skip LLM routing entirely. Mark an agent as `priority: true` and provide `triggerKeywords` — if any keyword matches, that agent runs immediately without an extra routing API call.
+Mark an agent `priority: true` and give it `triggerKeywords`. If any keyword matches the input, that agent runs immediately — before anything else, without an LLM routing call. Use this for emergencies, errors, or anything time-sensitive.
 
 ```ts
 new Agent({
   name: 'emergency',
   description: 'Handles urgent safety situations',
-  systemPrompt: 'The user needs immediate help. Give a single, clear, direct instruction.',
+  systemPrompt: 'The user needs immediate help. Give one clear instruction fast.',
   priority: true,
-  triggerKeywords: ['emergency', 'urgent', 'help me', 'crisis'],
+  triggerKeywords: ['emergency', 'urgent', 'help me now', 'crisis', 'call 911'],
 })
 ```
 
 ### Session memory
 
-Pass the same `sessionId` across calls and agents automatically share conversation history:
+Pass the same `sessionId` across calls and agents share the full conversation history automatically.
 
 ```ts
-const sid = 'user-abc-123';
+const sid = 'user-42';
 
-await pipeline.run('My name is Aarav', sid);
-await pipeline.run('What is my name?', sid);
-// → "Your name is Aarav."
+await pipeline.run("I'm building a REST API in Express", sid);
+await pipeline.run('What was I just building?', sid);
+// → "You were building a REST API in Express."
 
-pipeline.clearSession(sid); // wipe when done
+pipeline.clearSession(sid);
 ```
 
 ---
 
-## Full example: customer support pipeline
+## Full example: customer support pipeline with tools
 
 ```ts
-import { Pipeline, Agent, AgentTool } from 'agentmesh';
+import { Pipeline, Agent, OpenAIProvider } from 'agentmesh';
+import type { AgentTool } from 'agentmesh';
 
 const lookupOrder: AgentTool = {
   name: 'lookup_order',
-  description: 'Look up an order by order ID',
+  description: 'Look up an order by its ID',
   input_schema: {
     type: 'object',
     properties: {
-      order_id: { type: 'string', description: 'The order ID to look up' },
+      order_id: { type: 'string', description: 'The order ID' },
     },
     required: ['order_id'],
   },
   execute: async ({ order_id }) => ({
     id: order_id,
     status: 'shipped',
-    eta: '2026-06-24',
+    eta: '2026-06-28',
     carrier: 'FedEx',
+    tracking: '7489234892348',
   }),
 };
 
 const pipeline = new Pipeline({
-  apiKey: process.env.LLM_API_KEY!,
-  model: 'your-model-id',
+  provider: new OpenAIProvider(process.env.OPENAI_API_KEY!),
+  model: 'gpt-4o-mini',
   debug: true,
 });
 
 pipeline
   .addAgent(new Agent({
     name: 'escalation',
-    description: 'Handles angry or urgent customer complaints',
-    systemPrompt: 'De-escalate firmly and empathetically. Offer a concrete resolution.',
+    description: 'Handles angry or threatening customers',
+    systemPrompt: 'De-escalate calmly. Acknowledge frustration. Offer a concrete resolution.',
     priority: true,
-    triggerKeywords: ['furious', 'lawsuit', 'refund now', 'terrible', 'unacceptable'],
+    triggerKeywords: ['lawyer', 'lawsuit', 'furious', 'unacceptable', 'refund now'],
   }))
   .addAgent(new Agent({
     name: 'orders',
-    description: 'Handles order status, shipping, and tracking questions',
-    systemPrompt: 'You are a helpful order support agent. Look up orders and give clear status updates.',
+    description: 'Handles shipping, tracking, and order status questions',
+    systemPrompt: 'You are a helpful order support agent. Always look up the order before responding.',
     tools: [lookupOrder],
-    triggerKeywords: ['order', 'shipping', 'tracking', 'delivery', 'package'],
+    triggerKeywords: ['order', 'shipping', 'tracking', 'package', 'delivery', 'where is'],
   }))
   .addAgent(new Agent({
     name: 'general',
-    description: 'Handles all other customer questions',
-    systemPrompt: 'You are a friendly general support agent. Be concise and helpful.',
+    description: 'Handles all other customer service questions',
+    systemPrompt: 'You are a friendly and concise support agent.',
   }));
 
-const result = await pipeline.run('Where is my order #88291?');
-console.log(`Agent: ${result.agentUsed}`);
-console.log(`Tools used: ${result.toolsUsed.join(', ')}`);
+const result = await pipeline.run("Where is my order #88291? It's been two weeks.");
+
+console.log(`Agent:   ${result.agentUsed}`);
+console.log(`Routed:  ${result.routingReason}`);
+console.log(`Tools:   ${result.toolsUsed.join(', ')}`);
+console.log(`Time:    ${result.durationMs}ms`);
 console.log(result.output);
+```
+
+---
+
+## Bring your own provider
+
+Implement `LLMProvider` to use any API — Groq, Mistral, local Ollama, whatever:
+
+```ts
+import type { LLMProvider, LLMResponse } from 'agentmesh';
+
+class GroqProvider implements LLMProvider {
+  async chat({ model, system, messages, tools }): Promise<LLMResponse> {
+    // call your API here
+    return { text: '...', toolCalls: [], stopReason: 'end_turn' };
+  }
+
+  async submitToolResults({ model, system, messages, toolResults, tools }): Promise<LLMResponse> {
+    // submit tool results and get the next response
+    return { text: '...', toolCalls: [], stopReason: 'end_turn' };
+  }
+}
+
+const pipeline = new Pipeline({
+  provider: new GroqProvider(),
+  model: 'llama-3.1-8b-instant',
+});
 ```
 
 ---
@@ -203,48 +252,55 @@ console.log(result.output);
 
 ### `new Pipeline(config)`
 
-| Option | Type | Default | Description |
-|--------|------|---------|-------------|
-| `apiKey` | `string` | required | Your LLM API key |
-| `model` | `string` | required | Model ID to use |
-| `sessionTtlMs` | `number` | `1800000` | Session memory TTL |
-| `onToken` | `(t: string) => void` | — | Called with each agent response |
-| `debug` | `boolean` | `false` | Log routing decisions |
-
-### `pipeline.addAgent(agent)`
-
-Registers an agent. Returns `this` for chaining.
+| Option | Type | Required | Description |
+|--------|------|----------|-------------|
+| `provider` | `LLMProvider` | Yes | `AnthropicProvider` or `OpenAIProvider` |
+| `model` | `string` | Yes | Default model ID for all agents |
+| `sessionTtlMs` | `number` | No | Session expiry (default: 30 min) |
+| `onToken` | `(t: string) => void` | No | Called with each agent response |
+| `debug` | `boolean` | No | Log routing decisions to console |
 
 ### `pipeline.run(message, sessionId?)`
 
-Routes and runs. Returns `PipelineResult`:
+Routes the message, runs the agent, returns:
 
 ```ts
 {
-  output: string;         // agent's final response
-  agentUsed: string;      // which agent handled it
-  routingReason: string;  // why it was routed there
-  toolsUsed: string[];    // tools called during the run
-  sessionId: string;      // use this to continue the conversation
-  durationMs: number;
+  output: string;        // the agent's response
+  agentUsed: string;     // which agent handled it
+  routingReason: string; // why it was routed there
+  toolsUsed: string[];   // tool names called
+  sessionId: string;     // pass this back to continue the conversation
+  durationMs: number;    // total wall time
 }
 ```
 
-### `pipeline.clearSession(sessionId)`
+### `new Agent(config)`
 
-Wipes session memory for a user.
+| Option | Type | Required | Description |
+|--------|------|----------|-------------|
+| `name` | `string` | Yes | Unique agent name |
+| `description` | `string` | Yes | Used by the LLM router to pick agents |
+| `systemPrompt` | `string` | Yes | The agent's instructions |
+| `tools` | `AgentTool[]` | No | Tools the agent can call |
+| `model` | `string` | No | Override the pipeline's default model |
+| `maxIterations` | `number` | No | Max tool-use loops (default: 5) |
+| `priority` | `boolean` | No | If true, checked first via keyword match |
+| `triggerKeywords` | `string[]` | No | Keywords that route to this agent without an LLM call |
 
 ---
 
-## Routing logic
+## Why not LangChain / CrewAI / other?
 
-agentmesh routes in this order (fastest first):
-
-1. **Priority keyword match** — if a `priority: true` agent has a `triggerKeyword` in the message, it runs immediately. No LLM call.
-2. **Standard keyword match** — same for non-priority agents.
-3. **LLM-based routing** — one fast call reads agent descriptions and picks the best match.
-
-Most pipelines pay for exactly one routing call, not two.
+| | agentmesh | LangChain | CrewAI | OpenAI Agents SDK |
+|--|--|--|--|--|
+| Works with OpenAI | ✅ | ✅ | ✅ | ✅ |
+| Works with Anthropic | ✅ | ✅ | ✅ | ❌ |
+| Bring your own provider | ✅ | ✅ | ⚠️ | ❌ |
+| Lines to build a pipeline | ~15 | 50+ | 40+ | ~20 |
+| Priority short-circuit | ✅ | ❌ | ❌ | ❌ |
+| Session memory built-in | ✅ | ⚠️ | ❌ | ⚠️ |
+| Zero mandatory dependencies | ✅ | ❌ | ❌ | ❌ |
 
 ---
 

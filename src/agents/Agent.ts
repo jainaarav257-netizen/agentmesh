@@ -1,5 +1,4 @@
-import Anthropic from '@anthropic-ai/sdk';
-import type { AgentConfig, AgentResult, AgentTool, Message } from '../types/index.js';
+import type { AgentConfig, AgentResult, LLMProvider, Message } from '../types/index.js';
 
 export class Agent {
   readonly name: string;
@@ -25,7 +24,7 @@ export class Agent {
   async run(
     userMessage: string,
     history: Message[],
-    client: Anthropic,
+    provider: LLMProvider,
     model: string,
     onToken?: (t: string) => void,
     debug = false,
@@ -34,56 +33,65 @@ export class Agent {
     const toolsUsed: string[] = [];
     let iterations = 0;
     const maxIterations = this.config.maxIterations ?? 5;
+    const agentModel = this.config.model ?? model;
+    const tools = this.config.tools ?? [];
 
-    const anthropicTools: Anthropic.Tool[] = (this.config.tools ?? []).map(t => ({
-      name: t.name,
-      description: t.description,
-      input_schema: t.input_schema,
-    }));
-
-    const messages: Anthropic.MessageParam[] = [
-      ...history.map(m => ({ role: m.role as 'user' | 'assistant', content: m.content })),
+    const messages: Array<{ role: 'user' | 'assistant'; content: string }> = [
+      ...history.map(m => ({ role: m.role, content: m.content })),
       { role: 'user', content: userMessage },
     ];
 
     let finalText = '';
+    // Track full message history for multi-turn tool use
+    let fullMessages: Array<{ role: 'user' | 'assistant'; content: unknown }> = [...messages];
 
     while (iterations < maxIterations) {
       iterations++;
 
-      const response = await client.messages.create({
-        model: this.config.model ?? model,
-        max_tokens: 2048,
+      const response = await provider.chat({
+        model: agentModel,
         system: this.config.systemPrompt,
-        tools: anthropicTools.length > 0 ? anthropicTools : undefined,
-        messages,
+        messages: messages,
+        tools: tools.length > 0 ? tools : undefined,
       });
 
-      if (debug) console.log(`[agentmesh] ${this.name} iteration ${iterations}:`, response.stop_reason);
+      if (debug) console.log(`[agentmesh] ${this.name} iteration ${iterations}: stop=${response.stopReason}, tools=${response.toolCalls.length}`);
 
-      const toolUseBlocks = response.content.filter(b => b.type === 'tool_use') as Anthropic.ToolUseBlock[];
-      const textBlock = response.content.find(b => b.type === 'text') as Anthropic.TextBlock | undefined;
+      if (response.text) finalText = response.text;
 
-      if (textBlock?.text) finalText = textBlock.text;
+      if (response.stopReason === 'end_turn' || response.toolCalls.length === 0) break;
 
-      if (response.stop_reason === 'end_turn' || toolUseBlocks.length === 0) break;
-
-      messages.push({ role: 'assistant', content: response.content });
-
-      const toolResults: Anthropic.ToolResultBlockParam[] = [];
-      for (const block of toolUseBlocks) {
-        const tool = this.config.tools?.find(t => t.name === block.name);
-        if (!tool) continue;
-        toolsUsed.push(block.name);
+      // Execute tools
+      const toolResults: Array<{ id: string; content: string; isError?: boolean }> = [];
+      for (const call of response.toolCalls) {
+        const tool = tools.find(t => t.name === call.name);
+        if (!tool) {
+          toolResults.push({ id: call.id, content: `Unknown tool: ${call.name}`, isError: true });
+          continue;
+        }
+        toolsUsed.push(call.name);
         try {
-          const result = await tool.execute(block.input as Record<string, unknown>);
-          toolResults.push({ type: 'tool_result', tool_use_id: block.id, content: JSON.stringify(result) });
+          const result = await tool.execute(call.input);
+          toolResults.push({ id: call.id, content: JSON.stringify(result) });
         } catch (err) {
-          toolResults.push({ type: 'tool_result', tool_use_id: block.id, content: `Error: ${String(err)}`, is_error: true });
+          toolResults.push({ id: call.id, content: `Error: ${String(err)}`, isError: true });
         }
       }
 
-      messages.push({ role: 'user', content: toolResults });
+      // Submit results back
+      const next = await provider.submitToolResults({
+        model: agentModel,
+        system: this.config.systemPrompt,
+        messages: fullMessages,
+        toolResults,
+        tools: tools.length > 0 ? tools : undefined,
+      });
+
+      if (next.text) finalText = next.text;
+      if (next.stopReason === 'end_turn') break;
+
+      // Add assistant + tool results to history for next iteration
+      fullMessages = [...fullMessages, { role: 'assistant', content: response.text }];
     }
 
     if (onToken && finalText) onToken(finalText);
