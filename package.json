@@ -1,0 +1,47 @@
+{
+  "name": "agentmesh",
+  "version": "0.1.0",
+  "description": "Lightweight multi-agent orchestration framework for LLMs. Build pipelines where an orchestrator routes to specialist agents — with tool use, session memory, priority short-circuits, and streaming.",
+  "main": "dist/index.js",
+  "module": "dist/index.mjs",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "scripts": {
+    "build": "tsup src/index.ts --format cjs,esm --dts --clean",
+    "dev": "tsup src/index.ts --format cjs,esm --dts --watch",
+    "test": "node --experimental-vm-modules node_modules/.bin/jest",
+    "lint": "tsc --noEmit"
+  },
+  "keywords": [
+    "ai",
+    "agents",
+    "multi-agent",
+    "llm",
+    "orchestration",
+    "anthropic",
+    "openai",
+    "pipeline",
+    "agentic",
+    "workflow"
+  ],
+  "author": "Aarav Jain",
+  "license": "MIT",
+  "peerDependencies": {
+    "@anthropic-ai/sdk": ">=0.24.0"
+  },
+  "peerDependenciesMeta": {
+    "@anthropic-ai/sdk": { "optional": false }
+  },
+  "devDependencies": {
+    "@anthropic-ai/sdk": "^0.39.0",
+    "@types/node": "^22.0.0",
+    "tsup": "^8.0.0",
+    "typescript": "^5.5.0"
+  }
+}
