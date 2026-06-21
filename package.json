@@ -24,7 +24,6 @@
     "multi-agent",
     "llm",
     "orchestration",
-    "anthropic",
     "openai",
     "pipeline",
     "agentic",

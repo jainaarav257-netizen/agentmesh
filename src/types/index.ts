@@ -44,7 +44,7 @@ export interface PipelineResult {
 
 export interface PipelineConfig {
   apiKey: string;
-  model?: string;
+  model: string;
   maxTokens?: number;
   sessionTtlMs?: number;
   onToken?: (token: string) => void;

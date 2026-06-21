@@ -2,7 +2,7 @@
 
 **Lightweight multi-agent orchestration for LLMs.**
 
-Build pipelines where an orchestrator routes user messages to the right specialist agent — with tool use, session memory, priority short-circuits, and zero boilerplate.
+Build pipelines where a router directs user messages to the right specialist agent — with tool use, session memory, priority short-circuits, and zero boilerplate.
 
 ```bash
 npm install agentmesh
@@ -14,12 +14,12 @@ npm install agentmesh
 
 Most agent frameworks make you choose between raw API calls (too much code) and heavyweight abstractions (too much magic). agentmesh gives you one pattern — **Pipeline → Router → Agent** — and gets out of the way.
 
-- One API call to route, one to respond
-- Priority short-circuit: bypass LLM routing for time-sensitive signals (e.g. emergencies, errors)
+- One call to route, one to respond
+- Priority short-circuit: bypass LLM routing for time-sensitive signals
 - Keyword triggers for fast routing without an extra LLM call
 - Session memory included, no setup required
-- Works with any Anthropic Claude model
-- Full TypeScript, zero runtime dependencies beyond the Anthropic SDK
+- Full TypeScript, minimal dependencies
+- Works with any compatible LLM API
 
 ---
 
@@ -28,7 +28,10 @@ Most agent frameworks make you choose between raw API calls (too much code) and 
 ```ts
 import { Pipeline, Agent } from 'agentmesh';
 
-const pipeline = new Pipeline({ apiKey: process.env.ANTHROPIC_API_KEY! });
+const pipeline = new Pipeline({
+  apiKey: process.env.LLM_API_KEY!,
+  model: 'your-model-id',
+});
 
 pipeline
   .addAgent(new Agent({
@@ -49,7 +52,7 @@ pipeline
 
 const result = await pipeline.run('How do I reverse a linked list in Python?');
 console.log(result.output);
-// → agentmesh routed to "coder" and returned a clean Python solution
+// → routed to "coder", returned a clean Python solution
 ```
 
 ---
@@ -62,10 +65,10 @@ The entry point. Holds your agents, routes messages, and manages session memory.
 
 ```ts
 const pipeline = new Pipeline({
-  apiKey: 'sk-ant-...',
-  model: 'claude-sonnet-4-6',      // default model for all agents
-  sessionTtlMs: 30 * 60 * 1000,    // session expiry (default: 30 min)
-  debug: true,                       // log routing decisions
+  apiKey: 'your-api-key',
+  model: 'your-model-id',
+  sessionTtlMs: 30 * 60 * 1000,  // session expiry (default: 30 min)
+  debug: true,                     // log routing decisions
 });
 ```
 
@@ -78,8 +81,8 @@ new Agent({
   name: 'analyst',
   description: 'Analyzes data and generates reports',
   systemPrompt: 'You are a data analyst. Be precise and structured.',
-  model: 'claude-opus-4-8',         // override per-agent if needed
-  maxIterations: 8,                  // max tool-use loops (default: 5)
+  model: 'your-model-id',   // override per-agent if needed
+  maxIterations: 8,          // max tool-use loops (default: 5)
   tools: [myTool],
 })
 ```
@@ -118,7 +121,7 @@ new Agent({
   description: 'Handles urgent safety situations',
   systemPrompt: 'The user needs immediate help. Give a single, clear, direct instruction.',
   priority: true,
-  triggerKeywords: ['emergency', 'urgent', 'call 911', 'help me', 'crisis'],
+  triggerKeywords: ['emergency', 'urgent', 'help me', 'crisis'],
 })
 ```
 
@@ -162,7 +165,8 @@ const lookupOrder: AgentTool = {
 };
 
 const pipeline = new Pipeline({
-  apiKey: process.env.ANTHROPIC_API_KEY!,
+  apiKey: process.env.LLM_API_KEY!,
+  model: 'your-model-id',
   debug: true,
 });
 
@@ -201,8 +205,8 @@ console.log(result.output);
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `apiKey` | `string` | required | Anthropic API key |
-| `model` | `string` | `'claude-sonnet-4-6'` | Default model |
+| `apiKey` | `string` | required | Your LLM API key |
+| `model` | `string` | required | Model ID to use |
 | `sessionTtlMs` | `number` | `1800000` | Session memory TTL |
 | `onToken` | `(t: string) => void` | — | Called with each agent response |
 | `debug` | `boolean` | `false` | Log routing decisions |
@@ -238,9 +242,9 @@ agentmesh routes in this order (fastest first):
 
 1. **Priority keyword match** — if a `priority: true` agent has a `triggerKeyword` in the message, it runs immediately. No LLM call.
 2. **Standard keyword match** — same for non-priority agents.
-3. **LLM-based routing** — one fast Claude call reads agent descriptions and picks the best one.
+3. **LLM-based routing** — one fast call reads agent descriptions and picks the best match.
 
-This means most apps pay for exactly one routing call, not two.
+Most pipelines pay for exactly one routing call, not two.
 
 ---
 

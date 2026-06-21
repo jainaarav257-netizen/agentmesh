@@ -16,7 +16,7 @@ export class Pipeline {
   constructor(config: PipelineConfig) {
     this.config = config;
     this.client = new Anthropic({ apiKey: config.apiKey });
-    this.model = config.model ?? 'claude-sonnet-4-6';
+    this.model = config.model;
     this.memory = new SessionMemory(config.sessionTtlMs);
   }
 
