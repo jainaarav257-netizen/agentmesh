@@ -1,5 +1,5 @@
 {
-  "name": "agentmesh",
+  "name": "@aaravjain/agentmesh",
   "version": "0.2.0",
   "description": "Lightweight multi-agent orchestration for LLMs. Works with OpenAI and Anthropic. Pipeline → Router → Agent with priority short-circuits, session memory, and tool use.",
   "main": "dist/index.js",
